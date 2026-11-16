@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Metadata Viewer</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#f6f5f1;--card:#fff;--ink:#1c1b18;--mute:#6d6a62;--line:#e3e0d8;--acc:#c2410c;--accbg:#fff1e8}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#15140f;--card:#1e1d17;--ink:#f0eee6;--mute:#9a968a;--line:#322f26;--acc:#fb923c;--accbg:#2a2016}}
+:root[data-theme="dark"]{--bg:#15140f;--card:#1e1d17;--ink:#f0eee6;--mute:#9a968a;--line:#322f26;--acc:#fb923c;--accbg:#2a2016}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:980px;margin:0 auto;padding:28px 18px 60px}
+h1{font:700 28px/1.2 Georgia,"Times New Roman",serif;margin:0 0 4px}
+.sub{color:var(--mute);margin:0 0 22px}
+#drop{border:2px dashed var(--line);background:var(--card);border-radius:16px;padding:38px 18px;text-align:center;cursor:pointer;transition:.15s}
+#drop.over,#drop:hover{border-color:var(--acc);background:var(--accbg)}
+#drop b{color:var(--acc)}
+#drop small{display:block;color:var(--mute);margin-top:6px}
+#result{display:none;margin-top:22px}
+.top{display:grid;grid-template-columns:minmax(0,320px) 1fr;gap:18px;align-items:start}
+@media(max-width:720px){.top{grid-template-columns:1fr}}
+.prev{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px}
+.prev img,.prev video{width:100%;max-height:340px;object-fit:contain;border-radius:8px;display:block}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.bar input{flex:1;min-width:160px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit}
+button{padding:9px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;cursor:pointer}
+button:hover{border-color:var(--acc);color:var(--acc)}
+.sec{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:14px;overflow:hidden}
+.sec h2{margin:0;padding:10px 14px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--acc);background:var(--accbg);border-bottom:1px solid var(--line)}
+.sec h2 span{color:var(--mute);font-weight:400}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+td{padding:7px 14px;border-bottom:1px solid var(--line);vertical-align:top;word-break:break-word}
+tr:last-child td{border-bottom:0}
+td:first-child{width:36%;color:var(--mute);font-weight:500}
+td:last-child{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+a{color:var(--acc)}
+.note{color:var(--mute);padding:14px}
+#summary{margin-top:8px}.sum{background:var(--card);border:2px solid var(--acc);border-radius:16px;padding:18px}.sum h2{margin:0 0 8px;font:700 20px Georgia,serif}.sum p.lead{margin:0 0 14px;font-size:16px}.sum td:first-child{width:28%}.sum td:last-child{font-family:inherit;font-size:15px}.badge{display:inline-block;padding:6px 14px;border-radius:999px;font-weight:700;margin:6px 0 8px}.b-ai{background:rgba(220,38,38,.15);color:#dc2626}.b-real{background:rgba(22,163,74,.15);color:#16a34a}.b-unk{background:rgba(217,119,6,.18);color:#d97706}.sum ul{margin:6px 0 0;padding-left:20px;color:var(--mute);font-size:13px}.priv{margin-top:26px;color:var(--mute);font-size:13px;text-align:center}
+</style>
+</head>
+<body>
+<main>
+  <h1>Metadata Viewer</h1>
+  <p class="sub">Drop an image or video to see everything hidden inside it: EXIF, GPS, camera, XMP, IPTC, ICC and more.</p>
+
+  <label id="drop" for="file">
+    <b>Click to choose</b> or drag a file here
+    <small>JPG, PNG, HEIC, TIFF, WebP, MP4, MOV, WebM… · processed locally, never uploaded</small>
+  </label>
+  <input id="file" type="file" accept="image/*,video/*" hidden>
+
+  <div id="result">
+    <div class="top">
+      <div class="prev" id="prev"></div>
+      <div>
+        <div class="bar">
+          <input id="q" type="search" placeholder="Filter tags, e.g. ISO, Make, GPS…">
+          <button id="copy">Copy JSON</button>
+          <button id="dl">Download JSON</button>
+        </div>
+        <div id="gps"></div>
+        <div id="secs"></div>
+      </div>
+    </div>
+    <section id="summary"></section>
+  </div>
+  <p class="priv">Your file stays in your browser. Nothing is sent anywhere.</p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let report = {}, url = null;
+
+const drop = $('drop'), input = $('file');
+['dragenter','dragover'].forEach(e => drop.addEventListener(e, ev => {ev.preventDefault();drop.classList.add('over')}));
+['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => {ev.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop', ev => { const f = ev.dataTransfer.files[0]; if (f) handle(f); });
+input.addEventListener('change', () => { if (input.files[0]) handle(input.files[0]); });
+
+const fmtSize = b => { const u=['B','KB','MB','GB']; let i=0; while(b>=1024&&i<3){b/=1024;i++} return b.toFixed(i?2:0)+' '+u[i]; };
+const fmtDur = s => { const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=(s%60).toFixed(2); return (h?h+'h ':'')+(m||h?m+'m ':'')+x+'s'; };
+const gcd = (a,b) => b ? gcd(b,a%b) : a;
+
+function fmtVal(v){
+  if (v == null) return '—';
+  if (v instanceof Date) return isNaN(v) ? String(v) : v.toLocaleString() + '  (' + v.toISOString() + ')';
+  if (ArrayBuffer.isView(v) || v instanceof ArrayBuffer) return '[binary data, ' + v.byteLength + ' bytes]';
+  if (Array.isArray(v)) return v.map(fmtVal).join(', ');
+  if (typeof v === 'object') { const s = JSON.stringify(v); return s.length > 400 ? s.slice(0,400) + '…' : s; }
+  return String(v);
+}
+
+async function sha256(file){
+  try {
+    const buf = await file.arrayBuffer();
+    const h = await crypto.subtle.digest('SHA-256', buf);
+    return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2,'0')).join('');
+  } catch { return 'unavailable'; }
+}
+
+function readImage(src){ return new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; }); }
+function readVideo(src){ return new Promise(res => {
+  const v = document.createElement('video'); v.preload = 'metadata'; v.muted = true;
+  v.onloadedmetadata = () => res(v); v.onerror = () => res(null); v.src = src;
+}); }
+
+async function handle(file){
+  if (url) URL.revokeObjectURL(url);
+  url = URL.createObjectURL(file);
+  const isVideo = file.type.startsWith('video/'), isImage = file.type.startsWith('image/');
+  report = {};
+  $('result').style.display = 'block';
+  $('secs').innerHTML = '<p class="note">Reading metadata…</p>'; $('gps').innerHTML = '';
+  $('q').value = '';
+
+  const prev = $('prev'); prev.textContent = '';
+  const el = document.createElement(isVideo ? 'video' : 'img'); el.src = url;
+  if (isVideo) el.controls = true; else el.alt = 'Preview of ' + file.name;
+  prev.appendChild(el);
+
+  report['File'] = {
+    'Name': file.name, 'Type (MIME)': file.type || 'unknown', 'Size': fmtSize(file.size) + ' (' + file.size.toLocaleString() + ' bytes)',
+    'Last modified': new Date(file.lastModified).toLocaleString() + '  (' + new Date(file.lastModified).toISOString() + ')',
+    'Extension': (file.name.split('.').pop() || '').toLowerCase()
+  };
+
+  let gps = null, data = null;
+  if (isImage) {
+    const img = await readImage(url);
+    if (img) {
+      const w = img.naturalWidth, h = img.naturalHeight, g = gcd(w,h);
+      report['Image'] = { 'Width': w + ' px', 'Height': h + ' px', 'Megapixels': (w*h/1e6).toFixed(2) + ' MP', 'Aspect ratio': (w/g) + ':' + (h/g), 'Orientation': w>=h ? (w===h?'Square':'Landscape') : 'Portrait' };
+    }
+    try {
+      data = await exifr.parse(file, { ifd0:true, ifd1:true, exif:true, gps:true, interop:true, xmp:true, iptc:true, icc:true, jfif:true, ihdr:true, tiff:true, mergeOutput:false, translateValues:true, reviveValues:true, sanitize:true });
+      const names = { ifd0:'Main (TIFF/IFD0)', ifd1:'Thumbnail (IFD1)', exif:'EXIF', gps:'GPS', interop:'Interoperability', xmp:'XMP', iptc:'IPTC', icc:'ICC colour profile', jfif:'JFIF', ihdr:'PNG header' };
+      if (data) for (const k in data) if (data[k] && Object.keys(data[k]).length) report[names[k] || k] = data[k];
+      gps = await exifr.gps(file).catch(() => null);
+    } catch (e) { report['Notice'] = { 'Metadata': 'Could not parse (' + e.message + ')' }; }
+  }
+  if (isVideo) {
+    const v = await readVideo(url);
+    if (v) {
+      const w = v.videoWidth, h = v.videoHeight, g = gcd(w,h) || 1;
+      report['Video'] = { 'Duration': fmtDur(v.duration) + ' (' + v.duration.toFixed(3) + ' s)', 'Width': w + ' px', 'Height': h + ' px', 'Aspect ratio': (w/g) + ':' + (h/g), 'Approx. bitrate': v.duration ? ((file.size*8/v.duration)/1e6).toFixed(2) + ' Mbit/s' : '—', 'Has audio (hint)': (v.webkitAudioDecodedByteCount !== undefined || v.mozHasAudio !== undefined) ? String(!!(v.mozHasAudio || v.webkitAudioDecodedByteCount)) : 'unknown' };
+    } else report['Notice'] = { 'Video': 'Browser could not decode this format, so only file details are shown.' };
+  }
+  report['Checksum'] = { 'SHA-256': await sha256(file) };
+  if (!isImage && !isVideo) report['Notice'] = { 'Type': 'Not an image or video.' };
+
+  renderGps(gps);
+  render();
+  await renderSummary(file, data, gps);
+}
+
+const PHONES = /apple|samsung|google|xiaomi|redmi|poco|oneplus|oppo|vivo|huawei|honor|motorola|realme|nokia|asus|nothing|infinix|tecno|htc|lenovo|zte|iqoo/i;
+const AI_TOOLS = /midjourney|dall[-· ]?e|stable ?diffusion|firefly|openai|chatgpt|gpt-image|imagen|gemini|comfyui|automatic1111|leonardo\.ai|ideogram|novelai|nightcafe|dreamstudio|negative prompt|cfg scale/;
+const EDITORS = /photoshop|lightroom|snapseed|picsart|canva|gimp|facetune|vsco|capture one|affinity/i;
+
+async function detectAI(file, d){
+  const reasons = [];
+  let hay = '';
+  try { hay = JSON.stringify(d || {}, (k,v) => ArrayBuffer.isView(v) ? undefined : v).toLowerCase(); } catch {}
+  try { hay += ' ' + new TextDecoder('latin1').decode(new Uint8Array(await file.slice(0, 4*1024*1024).arrayBuffer())).toLowerCase(); } catch {}
+  if (/trainedalgorithmicmedia|compositesynthetic/.test(hay)) reasons.push('The file declares its source type as AI-generated (IPTC DigitalSourceType).');
+  const tool = hay.match(AI_TOOLS); if (tool) reasons.push('Found a generator signature in the file: “' + tool[0] + '”.');
+  const c2pa = /c2pa|contentcredentials|jumbf/.test(hay);
+  return { reasons, c2pa };
+}
+
+async function renderSummary(file, d, gps){
+  d = d || {};
+  const i0 = d.ifd0 || {}, ex = d.exif || {}, gp = d.gps || {};
+  const box = $('summary'); box.textContent = '';
+  const when = ex.DateTimeOriginal || ex.CreateDate || i0.DateTime;
+  const okDate = when instanceof Date && !isNaN(when);
+  const dateStr = okDate ? when.toLocaleDateString(undefined, {weekday:'long', year:'numeric', month:'long', day:'numeric'}) : null;
+  const timeStr = okDate ? when.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit', second:'2-digit'}) : null;
+  const make = String(i0.Make || '').trim(), model = String(i0.Model || '').trim();
+  const device = model ? (model.toLowerCase().startsWith(make.toLowerCase()) ? model : (make + ' ' + model).trim()) : make;
+  const isPhone = PHONES.test(make);
+  const hasLoc = gps && gps.latitude != null;
+  const software = String(i0.Software || '').trim();
+
+  // Plain-English description
+  let s = 'This ' + (file.type.startsWith('video/') ? 'video' : 'image');
+  if (okDate) s += ' was captured on ' + dateStr + ' at ' + timeStr; else s += ' has no capture date stored in it';
+  if (device) s += ', using ' + (isPhone ? 'a mobile phone: ' : 'a device: ') + device;
+  if (hasLoc) s += ', at coordinates ' + gps.latitude.toFixed(5) + ', ' + gps.longitude.toFixed(5);
+  s += '.';
+
+  const ai = await detectAI(file, d);
+  const edited = EDITORS.test(software);
+  let cls, label;
+  if (ai.reasons.length) { cls = 'b-ai'; label = '🤖 Likely AI-generated'; }
+  else if (device && okDate) { cls = 'b-real'; label = '📷 Not AI-generated (no AI markers found)'; }
+  else { cls = 'b-unk'; label = '❔ Unknown (no camera data, no AI markers)'; }
+
+  const sec = document.createElement('div'); sec.className = 'sum';
+  const h = document.createElement('h2'); h.textContent = 'Summary';
+  const lead = document.createElement('p'); lead.className = 'lead'; lead.textContent = s;
+  const badge = document.createElement('div'); badge.className = 'badge ' + cls; badge.textContent = label;
+  const t = document.createElement('table');
+  const row = (k, v) => { const tr = t.insertRow(); tr.insertCell().textContent = k; const c = tr.insertCell(); if (v instanceof Node) c.appendChild(v); else c.textContent = v; };
+  row('Date', dateStr || 'Not stored (file last modified: ' + new Date(file.lastModified).toLocaleDateString() + ')');
+  row('Time', timeStr || 'Not stored');
+  if (hasLoc) {
+    const a = document.createElement('a'); a.target = '_blank'; a.rel = 'noopener';
+    a.href = 'https://www.openstreetmap.org/?mlat=' + gps.latitude + '&mlon=' + gps.longitude + '#map=16/' + gps.latitude + '/' + gps.longitude;
+    a.textContent = 'Open on map ↗';
+    const sp = document.createElement('span'); sp.append(gps.latitude.toFixed(6) + ', ' + gps.longitude.toFixed(6) + (gp.GPSAltitude != null ? '  (altitude ' + Math.round(gp.GPSAltitude) + ' m)' : '') + '  ·  ', a);
+    row('Location', sp);
+  } else row('Location', 'Not available (no GPS data in this file)');
+  row('Taken by', device ? device + (isPhone ? '  (mobile phone)' : '  (camera / other device)') : 'Unknown (no device information)');
+  const cam = [ex.FNumber && 'f/' + ex.FNumber, ex.ExposureTime && '1/' + Math.round(1/ex.ExposureTime) + ' s', ex.ISO && 'ISO ' + ex.ISO, ex.FocalLength && ex.FocalLength + ' mm'].filter(Boolean).join(' · ');
+  if (cam) row('Camera settings', cam);
+  if (software) row('Software', software + (edited ? '  (image editing app, may have been edited)' : ''));
+  row('AI check', label);
+
+  sec.append(h, lead, badge);
+  const tw = document.createElement('div'); tw.className = 'tw'; tw.appendChild(t); sec.appendChild(tw);
+  const ul = document.createElement('ul');
+  ai.reasons.forEach(r => { const li = document.createElement('li'); li.textContent = r; ul.appendChild(li); });
+  if (ai.c2pa) { const li = document.createElement('li'); li.textContent = 'Content Credentials (C2PA) provenance data is embedded. Both AI tools and real cameras can add it.'; ul.appendChild(li); }
+  const note = document.createElement('li'); note.textContent = 'This label is a metadata check only. Metadata can be removed or faked, and AI images without markers can’t be detected this way, so treat it as a clue, not proof.'; ul.appendChild(note);
+  sec.appendChild(ul);
+  box.appendChild(sec);
+}
+
+function renderGps(g){
+  const box = $('gps'); box.innerHTML = '';
+  if (!g || g.latitude == null) return;
+  report['GPS location'] = { 'Latitude': g.latitude, 'Longitude': g.longitude };
+  const s = document.createElement('div'); s.className = 'sec';
+  const h = document.createElement('h2'); h.textContent = 'Location found in this file';
+  const p = document.createElement('p'); p.className = 'note';
+  const a = document.createElement('a'); a.target = '_blank'; a.rel = 'noopener';
+  a.href = 'https://www.openstreetmap.org/?mlat=' + g.latitude + '&mlon=' + g.longitude + '#map=16/' + g.latitude + '/' + g.longitude;
+  a.textContent = 'Open on map ↗';
+  p.append(g.latitude.toFixed(6) + ', ' + g.longitude.toFixed(6) + '  ·  ', a);
+  s.append(h, p); box.appendChild(s);
+}
+
+function render(){
+  const q = $('q').value.trim().toLowerCase(), root = $('secs'); root.textContent = '';
+  let shown = 0;
+  for (const [title, obj] of Object.entries(report)) {
+    const rows = Object.entries(obj).filter(([k,v]) => !q || k.toLowerCase().includes(q) || fmtVal(v).toLowerCase().includes(q));
+    if (!rows.length) continue;
+    shown++;
+    const sec = document.createElement('div'); sec.className = 'sec';
+    const h = document.createElement('h2'); h.textContent = title + ' ';
+    const c = document.createElement('span'); c.textContent = '· ' + rows.length; h.appendChild(c);
+    const wrap = document.createElement('div'); wrap.className = 'tw';
+    const t = document.createElement('table');
+    for (const [k,v] of rows) {
+      const tr = t.insertRow(); tr.insertCell().textContent = k; tr.insertCell().textContent = fmtVal(v);
+    }
+    wrap.appendChild(t); sec.append(h, wrap); root.appendChild(sec);
+  }
+  if (!shown) { const p = document.createElement('p'); p.className = 'note'; p.textContent = 'Nothing matches your filter.'; root.appendChild(p); }
+}
+
+$('q').addEventListener('input', render);
+const json = () => JSON.stringify(report, (k,v) => (ArrayBuffer.isView(v) ? '[binary ' + v.byteLength + ' bytes]' : v), 2);
+$('copy').onclick = async () => { try { await navigator.clipboard.writeText(json()); $('copy').textContent = 'Copied ✓'; setTimeout(() => $('copy').textContent = 'Copy JSON', 1500); } catch { $('copy').textContent = 'Copy failed'; } };
+$('dl').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([json()], {type:'application/json'})); a.download = (report.File?.Name || 'metadata') + '.json'; a.click(); };
+</script>
+</body>
+</html>
